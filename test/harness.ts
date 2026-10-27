@@ -5,6 +5,8 @@ import { statesEqual } from "../src/crdt.js";
 import { Gateway, type GatewayOptions } from "../src/gateway.js";
 import { Shard } from "../src/shard.js";
 
+export const TEST_SECRET = "test-secret-0123456789abcdef0123456789";
+
 /** Spins up a real multi-node cluster in-process on ephemeral ports. */
 export class TestCluster {
   readonly dir = mkdtempSync(join(tmpdir(), "scamshield-"));
@@ -26,7 +28,7 @@ export class TestCluster {
     }
     for (const s of this.shards.values()) s.setPeers(this.urls);
     for (let i = 0; i < gateways; i++) {
-      const gw = new Gateway({ shards: this.urls, reportBurst: 1e9, reportsPerMinute: 1e9, cacheTtlMs: 0, ...gatewayOptions });
+      const gw = new Gateway({ shards: this.urls, keySecret: TEST_SECRET, reportBurst: 1e9, reportsPerMinute: 1e9, cacheTtlMs: 0, ...gatewayOptions });
       this.gatewayUrls.push(await gw.start());
       this.gateways.push(gw);
     }
