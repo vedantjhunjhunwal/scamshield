@@ -1,0 +1,57 @@
+name: Deploy
+
+# Manual rollout of a published image to AWS with Terraform.
+# One-time setup (see README "Deployment"):
+#   secrets.AWS_DEPLOY_ROLE_ARN  IAM role trusted for GitHub OIDC from this repo
+#   secrets.TF_STATE_BUCKET      S3 bucket for Terraform state
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to deploy (a commit SHA published by CI, or latest)"
+        required: true
+        default: latest
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: infra/terraform
+    env:
+      AWS_REGION: ap-south-1
+      TF_VAR_image: ghcr.io/${{ github.repository }}:${{ inputs.image_tag }}
+      TF_VAR_repo_ref: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+      - run: >
+          terraform init
+          -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
+          -backend-config="key=scamshield/terraform.tfstate"
+          -backend-config="region=${{ env.AWS_REGION }}"
+      - run: terraform plan -input=false -out=tfplan
+      - run: terraform apply -input=false tfplan
+      - name: Smoke test
+        run: |
+          url=$(terraform output -raw api_url)
+          for i in $(seq 1 30); do
+            if curl -fsS "$url/healthz"; then exit 0; fi
+            sleep 10
+          done
+          echo "API did not become healthy" && exit 1

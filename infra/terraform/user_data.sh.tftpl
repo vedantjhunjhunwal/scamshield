@@ -1,0 +1,22 @@
+#!/bin/bash
+# Boot script: install Docker, fetch config from the repo, read secrets from SSM, start the stack.
+set -euo pipefail
+
+dnf install -y docker git
+systemctl enable --now docker
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -fsSL "https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-x86_64" \
+  -o /usr/local/lib/docker/cli-plugins/docker-compose
+chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+git clone --depth 1 --branch "${repo_ref}" https://github.com/vedantjhunjhunwal/scamshield /opt/scamshield
+cd /opt/scamshield
+
+umask 077
+{
+  echo "INDICATOR_KEY_SECRET=$(aws ssm get-parameter --region ${region} --with-decryption --name ${key_param} --query Parameter.Value --output text)"
+  echo "GRAFANA_ADMIN_PASSWORD=$(aws ssm get-parameter --region ${region} --with-decryption --name ${grafana_param} --query Parameter.Value --output text)"
+  echo "SCAMSHIELD_IMAGE=${image}"
+} > .env
+
+docker compose -f docker-compose.yml -f deploy/compose.prod.yml up -d --no-build
