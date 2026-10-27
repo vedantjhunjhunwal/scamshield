@@ -2,6 +2,7 @@
 // Usage: npm run build && npm run bench
 import autocannon from "autocannon";
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { availableParallelism, cpus, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +15,7 @@ const SHARDS = "s1=http://127.0.0.1:7001,s2=http://127.0.0.1:7002,s3=http://127.
 const GATEWAY = "http://127.0.0.1:8080";
 
 const dataDir = mkdtempSync(join(tmpdir(), "scamshield-bench-"));
-const env = { ...process.env, SHARDS, DATA_DIR: dataDir, GATEWAY_WORKERS };
+const env = { ...process.env, SHARDS, DATA_DIR: dataDir, GATEWAY_WORKERS, INDICATOR_KEY_SECRET: randomBytes(32).toString("hex") };
 const procs = [
   ...["s1", "s2", "s3"].map((id, i) => spawn("node", ["--no-warnings", "dist/cluster.js", "shard", id, String(7001 + i)], { env, stdio: "ignore" })),
   spawn("node", ["--no-warnings", "dist/cluster.js", "gateway", "8080"], { env, stdio: "ignore" }),

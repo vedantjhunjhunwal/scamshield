@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
-import { Counter, Gauge, Registry } from "prom-client";
+import { collectDefaultMetrics, Counter, Gauge, Registry } from "prom-client";
 import {
   decodeState,
   emptyState,
@@ -87,6 +87,7 @@ export class Shard {
     this.wal = new Wal<Entry>(join(options.dataDir, `${options.id}.wal`));
     for (const { key, state } of this.wal.replay()) this.apply(key, decodeState(state));
 
+    collectDefaultMetrics({ register: this.registry, prefix: "shard_" });
     this.coordinated = new Counter({ name: "shard_reports_coordinated_total", help: "Reports this shard coordinated", registers: [this.registry] });
     this.merged = new Counter({ name: "shard_merges_applied_total", help: "Replica states merged in", registers: [this.registry] });
     const keys = new Gauge({ name: "shard_keys", help: "Indicators stored", registers: [this.registry] });

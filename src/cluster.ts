@@ -1,5 +1,7 @@
 import cluster from "node:cluster";
+import { createServer } from "node:http";
 import { availableParallelism } from "node:os";
+import { AggregatorRegistry, collectDefaultMetrics, register } from "prom-client";
 import { Gateway } from "./gateway.js";
 import { Shard } from "./shard.js";
 
@@ -26,6 +28,12 @@ if (role === "shard") {
   console.log(`shard ${id} listening on ${port} (recovered ${recovered} entries from peers)`);
   process.on("SIGTERM", () => void shard.stop().then(() => process.exit(0)));
 } else if (role === "gateway") {
+  // Checked before forking so a missing secret fails once instead of crash-looping workers.
+  const keySecret = process.env.INDICATOR_KEY_SECRET ?? "";
+  if (keySecret.length < 32) {
+    console.error("INDICATOR_KEY_SECRET is required (32+ random characters, shared by every gateway)");
+    process.exit(1);
+  }
   const port = Number(args[0] ?? 8080);
   const workers = Number(process.env.GATEWAY_WORKERS ?? availableParallelism());
   if (cluster.isPrimary && workers > 1) {
@@ -34,9 +42,28 @@ if (role === "shard") {
     cluster.on("exit", (w, code) => {
       if (code !== 0) cluster.fork();
     });
-    console.log(`gateway listening on ${port} with ${workers} workers`);
+    // Each worker keeps its own counters, so a scrape of the shared port would see one
+    // worker at random. The primary serves the sum across workers on a separate port.
+    const aggregator = new AggregatorRegistry();
+    const metricsPort = Number(process.env.METRICS_PORT ?? 9100);
+    createServer(async (req, res) => {
+      if (req.url !== "/metrics") return void res.writeHead(404).end();
+      try {
+        const body = await aggregator.clusterMetrics();
+        res.writeHead(200, { "content-type": aggregator.contentType }).end(body);
+      } catch (err) {
+        res.writeHead(500).end(String(err));
+      }
+    }).listen(metricsPort, host);
+    console.log(`gateway listening on ${port} with ${workers} workers; aggregated metrics on ${metricsPort}`);
   } else {
-    const gateway = new Gateway({ shards });
+    // Constructing an AggregatorRegistry in a worker installs the IPC handler that
+    // answers the primary's metrics requests.
+    if (cluster.isWorker) {
+      new AggregatorRegistry();
+      collectDefaultMetrics({ register, prefix: "gateway_" });
+    }
+    const gateway = new Gateway({ shards, keySecret, ...(cluster.isWorker ? { registry: register } : {}) });
     await gateway.start(port, host);
     await gateway.probe();
     process.on("SIGTERM", () => void gateway.stop().then(() => process.exit(0)));
