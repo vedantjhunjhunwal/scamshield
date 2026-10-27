@@ -1,0 +1,29 @@
+{
+  "name": "scamshield",
+  "version": "1.0.0",
+  "description": "Distributed, crowdsourced scam-link and fraud-number reputation service: consistent-hash sharding, quorum replication, CRDT state and a group-commit WAL.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage",
+    "cluster": "node dist/cluster.js",
+    "bench": "node scripts/bench.mjs"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "fastify": "^5.12.7",
+    "prom-client": "^15.1.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@vitest/coverage-v8": "^5.0.5",
+    "autocannon": "^8.0.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

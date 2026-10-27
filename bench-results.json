@@ -1,0 +1,36 @@
+{
+  "host": {
+    "cpus": 4,
+    "model": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+    "node": "v22.22.0",
+    "gatewayWorkers": 2,
+    "connections": 100,
+    "seconds": 15
+  },
+  "results": [
+    {
+      "scenario": "report (quorum write, W=2 of N=3)",
+      "requestsPerSec": 1412,
+      "p50ms": 61,
+      "p99ms": 225,
+      "total": 21187,
+      "non2xx": 0,
+      "errors": 0,
+      "statusCodes": {
+        "202": 21187
+      }
+    },
+    {
+      "scenario": "check (quorum read, R=2 of N=3)",
+      "requestsPerSec": 3453,
+      "p50ms": 25,
+      "p99ms": 81,
+      "total": 51793,
+      "non2xx": 0,
+      "errors": 0,
+      "statusCodes": {
+        "200": 51793
+      }
+    }
+  ]
+}

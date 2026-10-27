@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 5s
+scrape_configs:
+  - job_name: scamshield-gateway
+    static_configs: [{ targets: ["gateway:8080"] }]
+  - job_name: scamshield-shards
+    static_configs: [{ targets: ["s1:7001", "s2:7002", "s3:7003"] }]
