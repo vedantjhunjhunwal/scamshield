@@ -3,3 +3,11 @@ dist
 coverage
 data
 *.log
+.env
+
+# Terraform
+.terraform/
+*.tfstate*
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl

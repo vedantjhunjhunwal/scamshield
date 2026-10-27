@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # The gateway primary aggregates metrics from every worker on :9100.
+  - job_name: scamshield-gateway
+    static_configs: [{ targets: ["gateway:9100"] }]
+  - job_name: scamshield-shards
+    static_configs: [{ targets: ["s1:7001", "s2:7002", "s3:7003"] }]
