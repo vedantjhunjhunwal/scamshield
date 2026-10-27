@@ -1,0 +1,68 @@
+# promtool test rules observability/alerts.test.yml
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'up{job="scamshield-shards", instance="s2:7002"}'
+        values: "1 1 0 0 0 0"
+      - series: 'up{job="scamshield-shards", instance="s1:7001"}'
+        values: "1 1 1 1 1 1"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ShardDown
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: ShardDown
+        exp_alerts:
+          - exp_labels: { severity: critical, job: scamshield-shards, instance: "s2:7002" }
+            exp_annotations:
+              summary: "Shard s2:7002 is down"
+              description: "Keys it replicates are running on two copies; a second failure loses write quorum for them."
+
+  - interval: 1m
+    # 100 req/s of which 5 req/s fail quorum = 5% > 1%.
+    input_series:
+      - series: 'gateway_requests_total{op="check",outcome="ok"}'
+        values: "0+5700x20"
+      - series: 'gateway_requests_total{op="check",outcome="no_quorum"}'
+        values: "0+300x20"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: QuorumFailures
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: QuorumFailures
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "More than 1% of requests are failing for lack of quorum"
+              description: "Clients are receiving 503s. Check ShardDown and network between gateway and shards."
+
+  - interval: 1m
+    # Healthy traffic: no quorum failures, no alert.
+    input_series:
+      - series: 'gateway_requests_total{op="check",outcome="ok"}'
+        values: "0+6000x20"
+      - series: 'gateway_requests_total{op="check",outcome="no_quorum"}'
+        values: "0x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: QuorumFailures
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'shard_pending_replications{instance="s1:7001"}'
+        values: "5000x15"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ReplicationBacklog
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "A shard has over 1,000 unacknowledged replica updates"
+              description: "Anti-entropy is not keeping up; replicas are diverging."

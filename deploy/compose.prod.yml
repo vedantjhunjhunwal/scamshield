@@ -1,0 +1,11 @@
+# Production override: run the image CI published to GHCR instead of building locally.
+#   docker compose -f docker-compose.yml -f deploy/compose.prod.yml up -d --no-build
+x-image: &image
+  image: ${SCAMSHIELD_IMAGE:?set SCAMSHIELD_IMAGE, e.g. ghcr.io/vedantjhunjhunwal/scamshield:latest}
+  pull_policy: always
+
+services:
+  s1: *image
+  s2: *image
+  s3: *image
+  gateway: *image

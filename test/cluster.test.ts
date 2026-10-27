@@ -2,14 +2,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { gcounter, hll } from "../src/crdt.js";
 import { HashRing } from "../src/hashring.js";
 import { parseIndicator } from "../src/normalize.js";
-import { get, post, TestCluster } from "./harness.js";
+import { get, post, TEST_SECRET, TestCluster } from "./harness.js";
 
 let cluster: TestCluster;
 afterEach(() => cluster?.stop());
 
 const report = (gw: string, indicator: string, reporterId: string) => post(`${gw}/v1/report`, { indicator, reporterId });
 const check = (gw: string, indicator: string) => get(`${gw}/v1/check?indicator=${encodeURIComponent(indicator)}`);
-const replicasOf = (c: TestCluster, indicator: string) => new HashRing(c.ids).preferenceList(parseIndicator(indicator).key, 3);
+const replicasOf = (c: TestCluster, indicator: string) => new HashRing(c.ids).preferenceList(parseIndicator(indicator, TEST_SECRET).key, 3);
 
 describe("cluster: reads and writes", () => {
   it("returns a write on the very next read (read-your-writes via R + W > N)", async () => {
@@ -40,7 +40,7 @@ describe("cluster: reads and writes", () => {
     const domains = Array.from({ length: 40 }, (_, i) => `scam-${i}.example`);
     await Promise.all(domains.map((d) => report(gw, d, "u")));
     for (const d of domains) {
-      const key = parseIndicator(d).key;
+      const key = parseIndicator(d, TEST_SECRET).key;
       expect(await cluster.converged(key, replicasOf(cluster, d))).toBe(true);
       const holders = cluster.ids.filter((id) => cluster.shards.get(id)!.stateOf(key));
       expect(holders.sort()).toEqual(replicasOf(cluster, d).sort());
@@ -57,7 +57,7 @@ describe("cluster: concurrency", () => {
       Array.from({ length: 2000 }, (_, i) => report(cluster.gatewayUrls[i % 3]!, indicator, `reporter-${i % reporters}`)),
     );
 
-    const key = parseIndicator(indicator).key;
+    const key = parseIndicator(indicator, TEST_SECRET).key;
     expect(await cluster.converged(key, cluster.ids)).toBe(true);
     for (const id of cluster.ids) {
       const s = cluster.shards.get(id)!.stateOf(key)!;
@@ -70,7 +70,7 @@ describe("cluster: concurrency", () => {
 
   it("de-duplicates a retried request on the coordinator", async () => {
     cluster = await new TestCluster(3).start();
-    const ind = parseIndicator("retry.example");
+    const ind = parseIndicator("retry.example", TEST_SECRET);
     const [coordinator] = replicasOf(cluster, "retry.example") as [string];
     const body = { requestId: "fixed-id", key: ind.key, kind: ind.kind, reporter: "r", replicas: cluster.ids };
     await post(`${cluster.urls[coordinator]}/internal/report`, body);
@@ -91,7 +91,7 @@ describe("cluster: failures", () => {
     expect((await check(gw, indicator)).body.totalReports).toBe(51);
 
     await cluster.restart("s2");
-    const key = parseIndicator(indicator).key;
+    const key = parseIndicator(indicator, TEST_SECRET).key;
     expect(await cluster.converged(key, cluster.ids)).toBe(true);
     expect(gcounter.value(cluster.shards.get("s2")!.stateOf(key)!.reports)).toBe(51);
   });
@@ -114,7 +114,7 @@ describe("cluster: failures", () => {
     // Bring s3 back *without* recovery and stop the others' anti-entropy from racing the read.
     for (const id of ["s1", "s2"]) (cluster.shards.get(id) as any).pending.clear();
     await cluster.restart("s3", false);
-    const key = parseIndicator(indicator).key;
+    const key = parseIndicator(indicator, TEST_SECRET).key;
     expect(cluster.shards.get("s3")!.stateOf(key)).toBeUndefined();
 
     expect((await check(gw, indicator)).body.totalReports).toBe(5);
@@ -162,7 +162,21 @@ describe("gateway: input handling and abuse controls", () => {
 
   it("refuses configurations without overlapping quorums", async () => {
     const { Gateway } = await import("../src/gateway.js");
-    expect(() => new Gateway({ shards: {}, replication: 3, writeQuorum: 1, readQuorum: 2 })).toThrow(/readQuorum/);
+    expect(() => new Gateway({ shards: {}, keySecret: TEST_SECRET, replication: 3, writeQuorum: 1, readQuorum: 2 })).toThrow(/readQuorum/);
+  });
+
+  it("refuses to start without a strong key secret", async () => {
+    const { Gateway } = await import("../src/gateway.js");
+    expect(() => new Gateway({ shards: {}, keySecret: "short" })).toThrow(/at least 32/);
+  });
+
+  it("never sends raw indicators or reporter ids to shards", async () => {
+    cluster = await new TestCluster(3).start();
+    const [gw] = cluster.gatewayUrls as [string];
+    await report(gw, "9876543210", "alice@example.com");
+    const dump = JSON.stringify(await (await fetch(`${cluster.urls.s1}/internal/dump?for=s1`)).json());
+    expect(dump).not.toContain("9876543210");
+    expect(dump).not.toContain("alice");
   });
 
   it("exposes health and Prometheus metrics on gateway and shards", async () => {

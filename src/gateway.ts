@@ -1,9 +1,9 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance } from "fastify";
-import { Counter, Histogram, Registry } from "prom-client";
+import { collectDefaultMetrics, Counter, Histogram, Registry } from "prom-client";
 import { decodeState, encodeState, mergeState, statesEqual, type EncodedState, type IndicatorKind, type IndicatorState } from "./crdt.js";
 import { HashRing } from "./hashring.js";
-import { InvalidIndicator, parseIndicator } from "./normalize.js";
+import { InvalidIndicator, keyedHash, MIN_SECRET_LENGTH, parseIndicator } from "./normalize.js";
 import { quorum, rpc } from "./rpc.js";
 import type { ReportResponse } from "./shard.js";
 import { verdictOf, type Verdict } from "./verdict.js";
@@ -11,6 +11,8 @@ import { verdictOf, type Verdict } from "./verdict.js";
 export interface GatewayOptions {
   /** Shard id -> base URL. */
   shards: Record<string, string>;
+  /** HMAC secret for indicator and reporter keys. Every gateway must share it; shards never see it. */
+  keySecret: string;
   replication?: number;
   writeQuorum?: number;
   readQuorum?: number;
@@ -19,6 +21,11 @@ export interface GatewayOptions {
   downAfter?: number;
   rpcTimeoutMs?: number;
   cacheTtlMs?: number;
+  /**
+   * Where metrics are registered. Pass prom-client's global registry when running
+   * under node:cluster so the primary can aggregate every worker's metrics.
+   */
+  registry?: Registry;
   /** Reports a single reporter may burst, and how many it regains per minute. */
   reportBurst?: number;
   reportsPerMinute?: number;
@@ -44,9 +51,10 @@ export class Gateway {
   private readonly probeFailures = new Map<string, number>();
   private readonly cache = new Map<string, { verdict: Verdict; expires: number }>();
   private readonly buckets = new Map<string, Bucket>();
-  private readonly opts: Required<Omit<GatewayOptions, "shards">>;
+  private readonly opts: Required<Omit<GatewayOptions, "shards" | "keySecret" | "registry">>;
+  private readonly keySecret: string;
   private timer: NodeJS.Timeout | undefined;
-  private readonly registry = new Registry();
+  private readonly registry: Registry;
   private readonly m;
 
   constructor(options: GatewayOptions) {
@@ -65,10 +73,14 @@ export class Gateway {
     if (this.opts.readQuorum + this.opts.writeQuorum <= this.opts.replication) {
       throw new Error("readQuorum + writeQuorum must exceed replication for read-your-writes");
     }
+    if (options.keySecret.length < MIN_SECRET_LENGTH) throw new Error(`keySecret must be at least ${MIN_SECRET_LENGTH} characters`);
+    this.keySecret = options.keySecret;
     this.shards = new Map(Object.entries(options.shards));
     this.ring = new HashRing(this.shards.keys());
     for (const id of this.shards.keys()) this.up.set(id, true);
 
+    this.registry = options.registry ?? new Registry();
+    if (!options.registry) collectDefaultMetrics({ register: this.registry, prefix: "gateway_" });
     const r = [this.registry];
     this.m = {
       requests: new Counter({ name: "gateway_requests_total", help: "API requests", labelNames: ["op", "outcome"] as const, registers: r }),
@@ -104,8 +116,8 @@ export class Gateway {
         if (!ind || typeof reporterId !== "string" || reporterId.length === 0 || reporterId.length > 128) {
           return reply.code(400).send({ error: "invalid_request" });
         }
-        // Reporter ids are hashed before leaving the gateway.
-        const reporter = createHash("sha256").update(reporterId).digest("hex").slice(0, 32);
+        // Reporter ids are keyed-hashed before leaving the gateway.
+        const reporter = keyedHash(this.keySecret, "reporter", reporterId);
         if (!this.take(reporter)) {
           this.m.requests.inc({ op: "report", outcome: "rate_limited" });
           return reply.code(429).send({ error: "rate_limited" });
@@ -161,7 +173,7 @@ export class Gateway {
     if (typeof raw !== "string" || raw.length > 2048) return undefined;
     if (kind !== undefined && kind !== "url" && kind !== "phone") return undefined;
     try {
-      return parseIndicator(raw, kind);
+      return parseIndicator(raw, this.keySecret, kind);
     } catch (err) {
       if (err instanceof InvalidIndicator) return undefined;
       throw err;

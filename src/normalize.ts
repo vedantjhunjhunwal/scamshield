@@ -1,17 +1,27 @@
-import { createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
 import type { IndicatorKind } from "./crdt.js";
 
 export interface Indicator {
   kind: IndicatorKind;
   canonical: string;
-  /** SHA-256 of the canonical form: shards store only this, never raw numbers or links. */
+  /** Keyed hash of the canonical form: shards store only this, never raw numbers or links. */
   key: string;
 }
 
 export class InvalidIndicator extends Error {}
 
-const keyOf = (kind: IndicatorKind, canonical: string) =>
-  createHash("sha256").update(`${kind}:${canonical}`).digest("hex").slice(0, 32);
+export const MIN_SECRET_LENGTH = 32;
+
+/**
+ * HMAC-SHA256 under a server-side secret. A plain hash would be reversible here:
+ * Indian mobile numbers span only ~10^10 values, so anyone holding shard data
+ * could hash every number and match. Without the secret that dictionary attack
+ * is infeasible.
+ */
+export function keyedHash(secret: string, domain: string, value: string): string {
+  if (secret.length < MIN_SECRET_LENGTH) throw new Error(`key secret must be at least ${MIN_SECRET_LENGTH} characters`);
+  return createHmac("sha256", secret).update(`${domain}:${value}`).digest("hex").slice(0, 32);
+}
 
 /**
  * Canonicalises a phone number to E.164. Bare 10-digit numbers starting 6-9 and
@@ -46,8 +56,8 @@ export function normalizeUrl(raw: string): string {
   return host;
 }
 
-export function parseIndicator(raw: string, kind?: IndicatorKind): Indicator {
+export function parseIndicator(raw: string, secret: string, kind?: IndicatorKind): Indicator {
   const detected: IndicatorKind = kind ?? (/^[+\d][\d\s()-]{7,}$/.test(raw.trim()) ? "phone" : "url");
   const canonical = detected === "phone" ? normalizePhone(raw) : normalizeUrl(raw);
-  return { kind: detected, canonical, key: keyOf(detected, canonical) };
+  return { kind: detected, canonical, key: keyedHash(secret, detected, canonical) };
 }
